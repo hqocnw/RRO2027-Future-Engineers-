@@ -536,14 +536,14 @@ doroga = FindPath(4,3)
 show_pole()
 print(doroga)
 make_drive(doroga)
-print(move)
 # cv2.imshow("pole",pole_draw)
 cv2.waitKey()
+print(move)
 # rotate(2)
 # draw_pole()
 # cv2.waitKey()
 # robot_move(7,4,1)
-move = [62,44,61,11,60]
+# move = [62,44,61,11,60]
 
 robot_dir = 1
 drive(1)
