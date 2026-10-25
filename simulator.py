@@ -68,6 +68,9 @@ move = [62,44,61,11,60]
 min_white = np.array((0, 0, 200), np.uint8)
 max_white = np.array((180, 100, 255), np.uint8)
 
+min_green = np.array((53, 128, 0), np.uint8)
+max_green = np.array((69, 255, 255), np.uint8)
+
 map= [[0,0,0,0,0,0,0,0],
       [0,0,0,0,0,0,0,0],
       [0,0,0,0,0,0,0,0],
@@ -96,7 +99,7 @@ wave=[[100,100,100,100,100,100,100,100],
       [100,100,100,100,100,100,100,100]
       ]
 
-
+camera = 0
 
 for i in range(8):
     for j in range(8):
@@ -624,19 +627,149 @@ def calc_path():
             j += 1
 
 
+def key_drive(t=1):
+    global robot_pos, robot_dir
+
+    K_UP, K_DOWN, K_LEFT, K_RIGHT, K_ESC, K_SPACE = 82, 84, 81, 83, 27,32
+    F_UP, F_DOWN, F_LEFT, F_RIGHT, F_SPACE = 0x260000, 0x280000, 0x250000, 0x270000,0x320000
+
+    show_pole()
+    cv2.waitKey(1)
+
+    while True:
+        try:
+            raw = cv2.waitKeyEx(50)
+        except AttributeError:
+            raw = cv2.waitKey(50)
+
+        if raw == -1:
+            continue
+
+        short = raw & 0xFF
+
+        action = None
+        if raw == F_UP    or short == K_UP:    action = "up"
+        elif raw == F_DOWN  or short == K_DOWN:  action = "down"
+        elif raw == F_LEFT  or short == K_LEFT:  action = "left"
+        elif raw == F_RIGHT or short == K_RIGHT: action = "right"
+        elif short == K_ESC or raw == K_ESC:     action = "esc"
+        elif raw == F_SPACE or short == K_SPACE: action = "space"
+
+        if action is None:
+            continue
+
+        if action == "esc":
+            break
+
+        elif action == "left":
+            rotate(0)
+            show_pole()
+
+        elif action == "right":
+            rotate(1)
+            show_pole()
+
+        elif action == "space":
+              scan()
+              print(find_green())
+
+        elif action in ("up", "down"):
+            sign = +1 if action == "up" else -1
+
+            dy = dx = 0
+            if robot_dir == 1:   dy = -1
+            elif robot_dir == 3: dy = +1
+            elif robot_dir == 2: dx = +1
+            elif robot_dir == 4: dx = -1
+            dy *= sign
+            dx *= sign
+
+            new_y = robot_pos[0] + dy
+            new_x = robot_pos[1] + dx
+
+            if not (0 <= new_y <= 7 and 0 <= new_x <= 7):
+                continue
+
+            start_cell  = str(map_draw[robot_pos[0]][robot_pos[1]])
+            target_cell = int(map_draw[new_y][new_x])
+
+            if   dy == -1: idx = 0
+            elif dx == +1: idx = 1
+            elif dy == +1: idx = 2
+            else:          idx = 3
+
+            allowed = dict_p.get(start_cell)
+            if allowed is None or target_cell not in allowed[idx]:
+                continue
+
+            delay = t + 10 if target_cell in (61, 62, 63, 64) else t
+            robot_move(new_y, new_x, delay)
+            show_pole()
+            cv2.waitKey(1)
+
+def scan():
+    global camera
+    y, x = robot_pos
+
+    ny, nx = y, x
+    if robot_dir == 1:   ny = y - 1
+    elif robot_dir == 3: ny = y + 1
+    elif robot_dir == 2: nx = x + 1
+    elif robot_dir == 4: nx = x - 1
+
+    if not (0 <= ny <= 7 and 0 <= nx <= 7):
+        return  # смотрим в стену — сканировать нечего
+
+    cell = map_draw[ny][nx]
+    path = "img/" + str(cell) + ".png"
+    camera = cv2.imread(path)
+    if camera is None:
+        print(f"WARNING: не удалось загрузить {path!r}")
+        return
+    cv2.imshow("camera", camera)
+    cv2.moveWindow("camera", 100, 100)
 
 
 
+def find_green():
+    global camera
 
+    if camera is None:
+        print("camera пустая — сначала нажмите SPACE для сканирования")
+        return None
 
+    # 1. Переводим в HSV и строим маску по заданным границам
+    hsv = cv2.cvtColor(camera, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, min_green, max_green)
 
+    # 2. Чистим маску от шума (морфология)
+    kernel = np.ones((5, 5), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  kernel)  # убирает мелкие точки
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)  # закрывает дырки
 
+    # 3. Ищем контуры
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
+    # 4. Рисуем прямоугольники вокруг достаточно крупных контуров
+    result = camera.copy()
+    found = []
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area < 100:          # отсекаем мелкие артефакты — подберите под масштаб
+            continue
 
+        x, y, w, h = cv2.boundingRect(cnt)   # прямоугольник, описывающий контур
+        cv2.rectangle(result, (x, y), (x + w, y + h), (0, 0, 255), 2)
 
+        # центр объекта — пригодится для навигации
+        cx, cy = x + w // 2, y + h // 2
+        cv2.circle(result, (cx, cy), 4, (255, 0, 0), -1)
+        found.append({"rect": (x, y, w, h), "center": (cx, cy), "area": area})
 
+    # cv2.imshow("green mask", mask)
+    cv2.imshow("green found", result)
 
-
+    return found
 
 
 
@@ -644,21 +777,27 @@ def calc_path():
 # start = pole[2][3]
 # print(start)
 # print(1 in dict_p.get(str(start))[0])
-robot_pos = [4,4] # y x
+# robot_pos = [4,4] # y x
 
-calc_path()
+robot_pos = [4, 4]
 draw_robot()
 draw_pole()
 show_pole()
+key_drive(1)
 
-cv2.waitKey()
-for i in range(4):
-      make_drive(fin_path[i])
-      print(fin_path[i])
-      print(move)
-      drive(1)
-      print(robot_pos)
-      cv2.waitKey()
+# calc_path()
+# draw_robot()
+# draw_pole()
+# show_pole()
+#
+# cv2.waitKey()
+# for i in range(4):
+#       make_drive(fin_path[i])
+#       print(fin_path[i])
+#       print(move)
+#       drive(1)
+#       print(robot_pos)
+#       cv2.waitKey()
 
 # show_pole()
 # draw_pole()
