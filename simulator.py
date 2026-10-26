@@ -71,6 +71,17 @@ max_white = np.array((180, 100, 255), np.uint8)
 min_green = np.array((53, 128, 0), np.uint8)
 max_green = np.array((69, 255, 255), np.uint8)
 
+min_blue = np.array((100, 150, 50), np.uint8)
+max_blue = np.array((140, 255, 255), np.uint8)
+
+min_black = np.array((0, 0, 0), np.uint8)
+max_black = np.array((180, 255, 50), np.uint8)
+
+min_red1 = np.array((0, 120, 70), np.uint8)
+max_red1 = np.array((10, 255, 255), np.uint8)
+min_red2 = np.array((170, 120, 70), np.uint8)
+max_red2 = np.array((180, 255, 255), np.uint8)
+
 map= [[0,0,0,0,0,0,0,0],
       [0,0,0,0,0,0,0,0],
       [0,0,0,0,0,0,0,0],
@@ -80,15 +91,24 @@ map= [[0,0,0,0,0,0,0,0],
       [0,0,0,0,0,0,0,0],
       [0,0,0,0,0,0,0,0]
       ]
-map_draw= [[1,1,1,1,1,1,1,1],
-      [2,63,252,2,2,64,1,63],
-      [1,61,1,1,2,1,1,2],
+map_draw= [[2,221,2,1,1,1,1,1],
+      [2,61,2,2,2,64,1,63],
+      [1,1,1,1,2,1,1,2],
       [1,1,1,1,1,1,2,2],
       [1,1,2,2,1,1,2,2],
       [1,1,2,2,1,1,61,61],
-      [1,2,121,61,1,1,1,1],
-      [151,1,1,1,1,31,31,31]
+      [1,2,121,61,1,1,1,2],
+      [151,2,2,2,1,31,31,31]
       ]
+# map_draw= [[1,1,1,1,1,1,1,1],
+#       [2,63,252,2,2,64,1,63],
+#       [1,61,1,1,2,1,1,2],
+#       [1,1,1,1,1,1,2,2],
+#       [1,1,2,2,1,1,2,2],
+#       [1,1,2,2,1,1,61,61],
+#       [1,2,121,61,1,1,1,1],
+#       [151,1,1,1,1,31,31,31]
+#       ]
 wave=[[100,100,100,100,100,100,100,100],
       [100,100,100,100,100,100,100,100],
       [100,100,100,100,100,100,100,100],
@@ -671,7 +691,9 @@ def key_drive(t=1):
 
         elif action == "space":
               scan()
-              print(find_green())
+              # print(find_col(6))
+              # print(find_col(1))
+              # print(detect_cell())
 
         elif action in ("up", "down"):
             sign = +1 if action == "up" else -1
@@ -726,9 +748,17 @@ def scan():
     if camera is None:
         print(f"WARNING: не удалось загрузить {path!r}")
         return
-    cv2.imshow("camera", camera)
-    cv2.moveWindow("camera", 100, 100)
+    # cv2.imshow("camera", camera)
+    # cv2.moveWindow("camera", 100, 100)
 
+def scan_cords(y,x):
+      global camera
+      cell = map_draw[y][x]
+      path = "img/" + str(cell) + ".png"
+      camera = cv2.imread(path)
+      if camera is None:
+            print(f"WARNING: не удалось загрузить {path!r}")
+            return
 
 
 def find_green():
@@ -771,7 +801,137 @@ def find_green():
 
     return found
 
+def find_col(col):
+      global camera
 
+      if camera is None:
+            print("camera пустая — сначала нажмите SPACE для сканирования")
+            return None
+
+      if col == 2:
+            hsv = cv2.cvtColor(camera, cv2.COLOR_BGR2HSV)
+            mask = cv2.inRange(hsv, min_blue, max_blue)
+      elif col == 3:
+            hsv = cv2.cvtColor(camera, cv2.COLOR_BGR2HSV)
+            mask = cv2.inRange(hsv, min_green, max_green)
+      elif col == 5:
+            hsv = cv2.cvtColor(camera, cv2.COLOR_BGR2HSV)
+            mask1 = cv2.inRange(hsv, min_red1, max_red1)
+            mask2 = cv2.inRange(hsv, min_red2, max_red2)
+            mask = mask1 + mask2
+      elif col == 6:
+            hsv = cv2.cvtColor(camera, cv2.COLOR_BGR2HSV)
+            mask = cv2.inRange(hsv, min_white, max_white)
+      elif col == 1:
+            hsv = cv2.cvtColor(camera, cv2.COLOR_BGR2HSV)
+            mask = cv2.inRange(hsv, min_black, max_black)
+
+      kernel = np.ones((5, 5), np.uint8)
+      mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)  # убирает мелкие точки
+      mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)  # закрывает дырки
+
+      # 3. Ищем контуры
+      contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+      # 4. Рисуем прямоугольники вокруг достаточно крупных контуров
+      result = camera.copy()
+      found = []
+      xm,ym,wm,hm,aream = 0,0,0,0,0
+      for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if area > 100:  # отсекаем мелкие артефакты — подберите под масштаб
+                  x, y, w, h = cv2.boundingRect(cnt)  # прямоугольник, описывающий контур
+                  if col != 6 and col !=1:
+                        if w*h > wm*hm:
+                              xm,ym,wm,hm = x, y, w, h
+                              aream = area
+                  else:
+                        if w * h > wm * hm:
+                              xm, ym, wm, hm = x, y, w, h
+                        aream += area
+
+      cv2.rectangle(result, (xm, ym), (xm + wm, ym + hm), (0, 255, 255), 2)
+
+      # центр объекта — пригодится для навигации
+      cx, cy = xm + wm // 2, ym + hm // 2
+      cv2.circle(result, (cx, cy), 4, (255, 0, 0), -1)
+      # found = ({"rect": (xm, ym, wm, hm), "center": (cx, cy), "area": area})
+
+      # cv2.imshow("green mask", mask)
+      # cv2.imshow("green found", result)
+
+      return [xm,ym,wm,hm,aream]
+
+def detect_cell():
+      kletka = 0
+      green = find_col(3)
+      black = find_col(1)
+      white = find_col(6)
+      blue = find_col(2)
+      red = find_col(5)
+      if green[4] > 0:
+            if green[3] > green[2]:
+                  if green[0]<40: kletka = 32
+                  else: kletka = 34
+            else:
+                  if green[1]<40: kletka = 33
+                  else: kletka = 31
+      elif red[4] > 0 and blue[4]> 0:
+            if red[1]+20 < blue[1]: kletka = 62
+            elif red[1]> blue[1]+20: kletka = 64
+            elif red[0]+20 < blue[0]>40: kletka = 61
+            elif red[0] >blue[0]+20: kletka = 63
+
+      elif red[4]>0:
+            if red[3]>red[2]:
+                  if white[4] > black[4]: kletka = 152
+                  elif white[4] < black[4]: kletka = 252
+            elif red[2] > red[3]:
+                  if white[4] > black[4]: kletka = 151
+                  elif white[4] < black[4]: kletka = 251
+
+      elif blue[4]>0:
+            if blue[3]>blue[2]:
+                  if white[4] > black[4]: kletka = 122
+                  elif white[4] < black[4]: kletka = 222
+            elif blue[2] > blue[3]:
+                  if white[4] > black[4]: kletka = 121
+                  elif white[4] < black[4]: kletka = 221
+      elif black[4]>white[4]: kletka = 2
+      else: kletka = 1
+
+      return kletka
+
+def sputnik():
+    global camera, images_array
+    saved_camera = camera
+    new_map = [[0 for _ in range(8)] for _ in range(8)]
+    for y in range(8):
+        for x in range(8):
+            cell_img = pole[y * 80:(y + 1) * 80, x * 80:(x + 1) * 80].copy()
+            camera = cell_img
+            cell_id = detect_cell()
+            new_map[y][x] = cell_id
+    camera = saved_camera
+
+    images_array[0:640, 660:1300] = (40, 40, 40)
+    for y in range(8):
+        for x in range(8):
+            cell_id = new_map[y][x]
+            path = f"img/{cell_id}.png"
+            img = cv2.imread(path)
+            ty = y * 80
+            tx = 660 + x * 80
+            images_array[ty:ty + 80, tx:tx + 80] = img
+            cv2.putText(images_array, str(cell_id),(tx + 3, ty + 15),cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 100), 3)
+    images_array = cv2.rectangle(images_array, (640, 0), (660, 640),(0, 250, 255), -1)
+    cv2.imshow("pole", images_array)
+
+    print("sputnik: новая карта")
+    for row in new_map:
+        print(" ".join(f"{v:>4}" for v in row))
+
+    return new_map
 
 # cords = "1"
 # start = pole[2][3]
@@ -783,8 +943,9 @@ robot_pos = [4, 4]
 draw_robot()
 draw_pole()
 show_pole()
-key_drive(1)
-
+# key_drive(1)
+cv2.waitKey()
+sputnik()
 # calc_path()
 # draw_robot()
 # draw_pole()
