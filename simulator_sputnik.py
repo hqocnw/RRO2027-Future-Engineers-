@@ -82,6 +82,11 @@ max_red1 = np.array((10, 255, 255), np.uint8)
 min_red2 = np.array((170, 120, 70), np.uint8)
 max_red2 = np.array((180, 255, 255), np.uint8)
 
+min_yellow = np.array((20, 100, 100), np.uint8)
+max_yellow = np.array((35, 255, 255), np.uint8)
+
+
+
 map= [[0,0,0,0,0,0,0,0],
       [0,0,0,0,0,0,0,0],
       [0,0,0,0,0,0,0,0],
@@ -91,24 +96,25 @@ map= [[0,0,0,0,0,0,0,0],
       [0,0,0,0,0,0,0,0],
       [0,0,0,0,0,0,0,0]
       ]
-map_draw= [[2,221,2,1,1,1,1,1],
-      [2,61,2,2,2,64,1,63],
-      [1,1,1,1,2,1,1,2],
-      [1,1,1,1,1,1,2,2],
-      [1,1,2,2,1,1,2,2],
-      [1,1,2,2,1,1,61,61],
-      [1,2,121,61,1,1,1,2],
-      [151,2,2,2,1,31,31,31]
-      ]
-# map_draw= [[1,1,1,1,1,1,1,1],
-#       [2,63,252,2,2,64,1,63],
-#       [1,61,1,1,2,1,1,2],
+# map_draw= [[2,221,2,1,1,1,1,1],
+#       [2,61,2,2,2,64,1,63],
+#       [1,1,1,1,2,1,1,2],
 #       [1,1,1,1,1,1,2,2],
 #       [1,1,2,2,1,1,2,2],
 #       [1,1,2,2,1,1,61,61],
-#       [1,2,121,61,1,1,1,1],
-#       [151,1,1,1,1,31,31,31]
+#       [1,2,121,61,1,1,1,2],
+#       [151,2,2,2,1,31,31,31]
 #       ]
+map_draw= [[1,1,1,1,1,1,1,1],
+      [2,63,252,2,2,64,1,63],
+      [1,61,1,1,2,1,1,2],
+      [1,1,1,1,1,1,2,2],
+      [1,1,2,2,1,1,2,2],
+      [1,1,2,2,1,1,61,61],
+      [1,2,121,61,1,1,1,1],
+      [151,1,1,1,1,31,31,31]
+      ]
+
 wave=[[100,100,100,100,100,100,100,100],
       [100,100,100,100,100,100,100,100],
       [100,100,100,100,100,100,100,100],
@@ -127,7 +133,7 @@ for i in range(8):
 
 pole_draw=pole.copy()
 
-robot_pos = [0,1] # y x
+robot_pos = [4,2] # y x
 robot_dir = 1
 dlina = 0
 trubi = [[0,0],[1,2],[6,2],[7,0],[7,6]]
@@ -825,6 +831,9 @@ def find_col(col):
       elif col == 1:
             hsv = cv2.cvtColor(camera, cv2.COLOR_BGR2HSV)
             mask = cv2.inRange(hsv, min_black, max_black)
+      elif col == 4:
+            hsv = cv2.cvtColor(camera, cv2.COLOR_BGR2HSV)
+            mask = cv2.inRange(hsv, min_yellow, max_yellow)
 
       kernel = np.ones((5, 5), np.uint8)
       mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)  # убирает мелкие точки
@@ -863,26 +872,28 @@ def find_col(col):
       return [xm,ym,wm,hm,aream]
 
 def detect_cell():
+      global kletka
       kletka = 0
       green = find_col(3)
       black = find_col(1)
       white = find_col(6)
       blue = find_col(2)
       red = find_col(5)
-      if green[4] > 0:
+      yellow = find_col(4)
+      if green[4] > 0:#находим зеленые подставки
             if green[3] > green[2]:
                   if green[0]<40: kletka = 32
                   else: kletka = 34
             else:
                   if green[1]<40: kletka = 33
                   else: kletka = 31
-      elif red[4] > 0 and blue[4]> 0:
+      elif red[4] > 0 and blue[4]> 0:#пандусы
             if red[1]+20 < blue[1]: kletka = 62
             elif red[1]> blue[1]+20: kletka = 64
-            elif red[0]+20 < blue[0]>40: kletka = 61
+            elif red[0]+20 < blue[0]: kletka = 61
             elif red[0] >blue[0]+20: kletka = 63
 
-      elif red[4]>0:
+      elif red[4]>0:#красные трубы
             if red[3]>red[2]:
                   if white[4] > black[4]: kletka = 152
                   elif white[4] < black[4]: kletka = 252
@@ -890,20 +901,44 @@ def detect_cell():
                   if white[4] > black[4]: kletka = 151
                   elif white[4] < black[4]: kletka = 251
 
-      elif blue[4]>0:
+      elif blue[4]>0:#синие трубы
             if blue[3]>blue[2]:
                   if white[4] > black[4]: kletka = 122
                   elif white[4] < black[4]: kletka = 222
             elif blue[2] > blue[3]:
                   if white[4] > black[4]: kletka = 121
                   elif white[4] < black[4]: kletka = 221
-      elif black[4]>white[4]: kletka = 2
-      else: kletka = 1
+      elif black[4]>white[4]: kletka = 2#2 этаж
+      else: kletka = 1#1 этаж
+
+      if yellow[4]>0:
+            if yellow[3]>yellow[2]:
+                  if red[0]<40:
+                        kletka = 1511
+                  else: kletka = 153
+            else:
+                  if red[1]<40: kletka = 152
+                  else: kletka = 154
 
       return kletka
 
+def detect_robot():
+      global camera, images_array,posu
+      posu = 0
+      saved_camera = camera
+      for y in range(8):
+            for x in range(8):
+                  camera = pole_draw[y * 80:(y + 1) * 80, x * 80:(x + 1) * 80].copy()
+                  cell_id = detect_cell()
+                  if cell_id in (1511,152,153,154):
+                        posu = cell_id
+                        camera = saved_camera
+                        return [y, x]
+      camera = saved_camera
+      return [0, 0]
+
 def sputnik():
-    global camera, images_array
+    global camera, images_array,new_map
     saved_camera = camera
     new_map = [[0 for _ in range(8)] for _ in range(8)]
     for y in range(8):
@@ -933,19 +968,94 @@ def sputnik():
 
     return new_map
 
+def sputnik_go():
+    global robot_dir, robot_pos, map_draw, new_map, pole_draw,posu
+
+    # --- 1. Стартовое состояние ---
+    draw_robot()
+    draw_pole()
+    show_pole()
+    cv2.waitKey(1)
+
+    # --- 2. Сканирование карты ---
+    new_map = sputnik()
+
+    # --- 3. Робот и его направление ---
+    #     detect_cell() возвращает 1511/152/153/154 для маркера робота
+    robot_pos = detect_robot()
+    marker = posu
+
+    if   marker == 1511: robot_dir = 1
+    elif marker == 152:  robot_dir = 2
+    elif marker == 153:  robot_dir = 3
+    elif marker == 154:  robot_dir = 4
+    else:
+        print(f"WARN: робот не найден (marker={marker} в {robot_pos})")
+        return
+
+    # --- 4. Подмена карты на распознанную ---
+    map_draw = [row[:] for row in new_map]
+    pole_draw = pole.copy()
+    draw_robot()
+    draw_pole()
+    show_pole()
+    cv2.waitKey(1)
+
+    # --- 5. Кратчайший маршрут по всем трубам ---
+    tubes = [[y, x] for y in range(8) for x in range(8)
+             if map_draw[y][x] in (151, 152, 251, 252, 121, 122, 221, 222)]
+    stands = [[y, x] for y in range(8) for x in range(8) if map_draw[y][x] in (31, 32, 33, 34)]
+    if len(tubes) != 3 or not stands:  # calc_path перебирает ровно 3 трубы
+        print(f"WARN: нужно 3 трубы и подставка, найдено труб={len(tubes)}, подставок={len(stands)}")
+        return
+    trubi[:] = [robot_pos] + tubes + [stands[len(stands) // 2]]
+    calc_path()
+
+    # --- 6. Показать маршрут ---
+    pole_draw = pole.copy()
+    draw_robot()
+    size  = [20, 15, 10, 5]
+    color = [(0,0,255), (0,255,255), (255,0,0), (0,255,0)]
+    for j, leg in enumerate(fin_path):
+        for y, x in leg:
+            cv2.circle(pole_draw, (x*80+40, y*80+40), size[j], color[j], -1)
+    draw_pole()
+    show_pole()
+    cv2.waitKey()
+
+    # --- 7. Проехать маршрут ---
+    for j, leg in enumerate(fin_path):
+        if not leg or leg == [[-1, -1]]:
+            print(f"WARN: участок {j} не найден, пропускаю")
+            continue
+        make_drive(leg)
+        drive(1)
+        draw_robot()
+        draw_pole()
+        show_pole()
+        cv2.waitKey()
+
+    print(f"sputnik_go: готово, финиш {robot_pos}, dir={robot_dir}")
+    cv2.waitKey(0)
+
+# def slam():
+
 # cords = "1"
 # start = pole[2][3]
 # print(start)
 # print(1 in dict_p.get(str(start))[0])
 # robot_pos = [4,4] # y x
 
-robot_pos = [4, 4]
-draw_robot()
-draw_pole()
-show_pole()
-# key_drive(1)
-cv2.waitKey()
-sputnik()
+sputnik_go()
+# robot_pos = [4, 4]
+# draw_robot()
+# draw_pole()
+# show_pole()
+# # key_drive(1)
+# cv2.waitKey()
+# robot_pos = detect_robot()
+# print(robot_pos)
+# sputnik()
 # calc_path()
 # draw_robot()
 # draw_pole()
