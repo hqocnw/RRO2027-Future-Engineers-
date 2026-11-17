@@ -745,7 +745,7 @@ def draw_scan_panel(imgs):
       roi = camera_view()[80:160, 80:160]
       images_array[600:680, 710:790] = roi
 
-      cv2.imshow("pole", images_array)
+      draw_metrika()  # панель очищена - рисуем метрику заново (там же imshow)
 
 
 def dolya_krasnogo(kusok):
@@ -1412,6 +1412,7 @@ def slam_zadanie(sy, sx):
       trubi[:] = [[ry, rx]] + tubes + [stands[len(stands) // 2]]
       fin_path.clear()
       v_robote.clear()
+      sobrannye.clear()
       calc_path()
 
       # показываем маршрут на поле
@@ -1460,7 +1461,19 @@ def zamenit_kletku(ty, tx, novyi):
       return True
 
 
-v_robote = []  # коды труб, которые робот везет
+v_robote = []    # коды труб, которые робот сейчас везет
+sobrannye = []   # коды труб в том порядке, в каком робот их собрал (не меняется при выгрузке)
+
+
+def cvet_truby(kod):
+      # цвет трубы для рисования: 2 - синяя, 5 - красная (труба 151 -> 5, подставка с трубой 315 -> 5)
+      if kod >= 300:
+            c = kod % 10
+      else:
+            c = (kod // 10) % 10
+      if c == 2:
+            return (204, 72, 63)
+      return (36, 28, 237)
 
 
 def zabrat_trubu(ty, tx):
@@ -1471,22 +1484,110 @@ def zabrat_trubu(ty, tx):
             return
       if zamenit_kletku(ty, tx, kod * 10):
             v_robote.append(kod)
+            sobrannye.append(kod)
             print("забрали трубу", kod, "из клетки", [ty, tx], "- везем", v_robote)
+            draw_metrika()
+
+
+def poryadok_vygruzki(truby):
+      # по регламенту: две трубы одного цвета по бокам, труба другого цвета посередине
+      # возвращает трубы в порядке клеток подставки: [бок, середина, бок]
+      if len(truby) != 3:
+            return truby[:]
+      cveta = [(k // 10) % 10 for k in truby]
+      for i in range(3):
+            if cveta.count(cveta[i]) == 1:  # эта труба одна такого цвета - ее в середину
+                  boka = [truby[j] for j in range(3) if j != i]
+                  return [boka[0], truby[i], boka[1]]
+      return truby[:]  # все три одного цвета - кладем как есть
 
 
 def vygruzit_truby():
-      # робот у зеленой подставки: кладет трубы, которые везет, на клетки подставки по одной
+      # трубы лежат в роботе друг на друге: снять можно только верхнюю - последнюю собранную.
+      # Регламент говорит, какого цвета труба должна лежать в каждой клетке подставки,
+      # поэтому берем верхнюю трубу и везем ее на свободную клетку подставки ее цвета.
       # код подставки с трубой = код подставки + цвет трубы (31 + синяя -> 312, 31 + красная -> 315)
+      stands = []
       for y in range(8):
             for x in range(8):
-                  if map_draw[y][x] in (31, 32, 33, 34) and len(v_robote) > 0:
-                        kod = v_robote[0]
-                        cvet = (kod // 10) % 10  # средняя цифра кода трубы: 2 - синяя, 5 - красная
-                        if zamenit_kletku(y, x, map_draw[y][x] * 10 + cvet):
-                              v_robote.pop(0)
-                              print("положили трубу", kod, "на подставку", [y, x])
-      if len(v_robote) > 0:
-            print("vygruzit_truby: не хватило места на подставке, в роботе остались", v_robote)
+                  if map_draw[y][x] in (31, 32, 33, 34):
+                        stands.append([y, x])  # по порядку: слева направо (или сверху вниз)
+      plan = poryadok_vygruzki(v_robote)
+      print("по регламенту на подставке будет:", plan)
+      cveta_mest = [(k // 10) % 10 for k in plan]          # какой цвет нужен в каждой клетке подставки
+      svobodno = list(range(min(len(stands), len(plan))))  # номера свободных клеток подставки
+
+      while len(v_robote) > 0:
+            kod = v_robote[-1]       # верхняя труба
+            cvet = (kod // 10) % 10  # средняя цифра кода трубы: 2 - синяя, 5 - красная
+            # свободная клетка нужного цвета, ближайшая к роботу
+            mesto = None
+            for i in svobodno:
+                  if cveta_mest[i] == cvet:
+                        d = abs(stands[i][0] - robot_pos[0]) + abs(stands[i][1] - robot_pos[1])
+                        if mesto is None or d < luchshee:
+                              mesto = i
+                              luchshee = d
+            if mesto is None:
+                  print("vygruzit_truby: на подставке нет места для трубы", kod, ", в роботе остались", v_robote)
+                  break
+            y, x = stands[mesto]
+
+            # подъезжаем к этой клетке подставки так же, как calc_path подъезжает к трубам
+            Wave(robot_pos[0], robot_pos[1])
+            der, _ = FindPath(y, x)
+            if der[0] == [-1, -1]:
+                  print("vygruzit_truby: не доехать до клетки подставки", [y, x], ", в роботе остались", v_robote)
+                  break
+            der.append([y, x])
+            make_drive(der)  # последний поворот - лицом к подставке
+            drive(1)
+
+            if not zamenit_kletku(y, x, map_draw[y][x] * 10 + cvet):
+                  break
+            svobodno.remove(mesto)
+            v_robote.pop()
+            print("сняли сверху трубу", kod, "и положили на подставку", [y, x])
+            draw_slam_map(granitsy["top"] + robot_pos[0], granitsy["left"] + robot_pos[1], None)
+            draw_robot()
+            show_pole()
+            draw_metrika()
+            cv2.waitKey(500)
+      print("порядок сбора труб:", sobrannye)
+
+
+def draw_metrika():
+      # метрика посередине экрана (между картами): трубы в порядке сбора и что лежит на подставке
+      white = (255, 255, 255)
+      images_array[100:280, 690:810] = (0, 0, 0)
+      cv2.putText(images_array, "Sobrano " + str(len(sobrannye)) + "/3", (695, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.45, white, 1)
+      for i in range(len(sobrannye)):
+            x = 698 + i * 38
+            cv2.rectangle(images_array, (x, 130), (x + 28, 158), cvet_truby(sobrannye[i]), -1)
+            cv2.putText(images_array, str(i + 1), (x + 9, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.5, white, 1)
+
+      # подставка по карте робота: серый - пусто, цвет - лежит труба
+      cv2.putText(images_array, "Podstavka", (695, 190), cv2.FONT_HERSHEY_SIMPLEX, 0.45, white, 1)
+      kletki = []
+      for y in range(17):
+            for x in range(17):
+                  if slam_map[y][x] in (31, 32, 33, 34) or 300 <= slam_map[y][x] < 400:
+                        kletki.append(slam_map[y][x])
+      for i in range(min(3, len(kletki))):
+            x = 698 + i * 38
+            if kletki[i] >= 300:
+                  color = cvet_truby(kletki[i])
+            else:
+                  color = (60, 60, 60)
+            cv2.rectangle(images_array, (x, 200), (x + 28, 228), color, -1)
+            cv2.rectangle(images_array, (x, 200), (x + 28, 228), (34, 177, 76), 2)  # зеленая рамка - подставка
+
+      # что лежит в роботе: слева нижняя труба, справа верхняя (ее снимают первой)
+      cv2.putText(images_array, "V robote", (695, 248), cv2.FONT_HERSHEY_SIMPLEX, 0.45, white, 1)
+      for i in range(len(v_robote)):
+            x = 698 + i * 38
+            cv2.rectangle(images_array, (x, 256), (x + 28, 272), cvet_truby(v_robote[i]), -1)
+      cv2.imshow("pole", images_array)
 
 
 robot_pos = [5, 0]   # стартовая клетка (y, x)
