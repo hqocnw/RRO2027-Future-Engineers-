@@ -835,8 +835,15 @@ def mozhno_ehat(y, x, ny, nx, sy, sx):
       return slam_map[ny][nx] in razresheno[k]
 
 
+def na_panduse(y, x):
+      # клетка (y, x) slam_map - пандус: на нем робот не останавливается, не поворачивает и не сканирует
+      return slam_map[y][x] in (61, 62, 63, 64)
+
+
 def vidit_neizvestnoe(y, x, d):
       # увидит ли камера (буква Т) из клетки (y, x) при направлении d хоть одну неизвестную клетку поля
+      if na_panduse(y, x):
+            return False  # с пандуса не сканируем
       for dx, dy in offsets_T[d]:
             ny = y + dy
             nx = x + dx
@@ -870,8 +877,9 @@ def plan_issledovaniya(sy, sx, sdir):
             nx = x + shagi[d][1]
             if mozhno_ehat(y, x, ny, nx, sy, sx):
                   sosedi.append((ny, nx, d))      # вперед
-            sosedi.append((y, x, d % 4 + 1))       # поворот направо
-            sosedi.append((y, x, (d + 2) % 4 + 1)) # поворот налево
+            if not na_panduse(y, x):              # на пандусе только вперед, без поворотов
+                  sosedi.append((y, x, d % 4 + 1))       # поворот направо
+                  sosedi.append((y, x, (d + 2) % 4 + 1)) # поворот налево
             for s in sosedi:
                   if s not in otkuda:
                         otkuda[s] = (y, x, d)
@@ -1332,7 +1340,7 @@ def slam_explore(t=300):
       imgs = [None, None, None, None]
       shagov = 0
       while shagov < 300:  # защита от вечного цикла
-            if vse_naideno(sy, sx):
+            if not na_panduse(sy, sx) and vse_naideno(sy, sx):  # на пандусе не останавливаемся
                   print("slam_explore: трубы и подставка найдены, до них можно доехать, шагов:", shagov)
                   break
             plan = plan_issledovaniya(sy, sx, robot_dir)
@@ -1345,10 +1353,17 @@ def slam_explore(t=300):
                   if nd != robot_dir:
                         povernut_v(nd)
                   else:
+                        # на пандус и с пандуса едем медленно
+                        if na_panduse(sy, sx) or na_panduse(ny, nx):
+                              skorost = 15
+                        else:
+                              skorost = 1
                         # это "мир": настоящий робот на поле едет туда же, куда робот думает
-                        robot_move(robot_pos[0] + ny - sy, robot_pos[1] + nx - sx, 1)
+                        robot_move(robot_pos[0] + ny - sy, robot_pos[1] + nx - sx, skorost)
                         sy, sx = ny, nx
                   shagov += 1
+            if na_panduse(sy, sx):
+                  continue  # на пандусе не сканируем и не останавливаемся - сразу едем дальше
             imgs = slam_skan(sy, sx)
 
             # клетки Т, которые после скана остались неизвестными, больше не ждем (не распознали)
