@@ -88,15 +88,6 @@ max_yellow = np.array((35, 255, 255), np.uint8)
 
 
 
-map= [[0,0,0,0,0,0,0,0],
-      [0,0,0,0,0,0,0,0],
-      [0,0,0,0,0,0,0,0],
-      [0,0,0,0,0,0,0,0],
-      [0,0,0,0,0,0,0,0],
-      [0,0,0,0,0,0,0,0],
-      [0,0,0,0,0,0,0,0],
-      [0,0,0,0,0,0,0,0]
-      ]
 # map_draw= [[2,221,2,1,1,1,1,1],
 #       [2,61,2,2,2,64,1,63],
 #       [1,1,1,1,2,1,1,2],
@@ -126,15 +117,14 @@ wave=[[100,100,100,100,100,100,100,100],
       [100,100,100,100,100,100,100,100]
       ]
 slam_map = [[0 for _ in range(17)] for _ in range(17)]
-bort_map = [[0 for _ in range(17)] for _ in range(17)]  # для углов: 0 - не знаем, 1 - поле, 2 - бортик
+# края поля в slam_map: номер первой/последней строки и столбца поля, None - еще не знаем
+granitsy = {"top": None, "bottom": None, "left": None, "right": None}
 
 camera = 0
 
 PAD  = 25
 CELL = 80
 GRID = 8
-
-coords = 0
 
 for i in range(GRID):
     for j in range(GRID):
@@ -206,15 +196,6 @@ def draw_pole():
 def show_pole():
     draw_pole()
     cv2.imshow("pole", images_array)
-
-
-def Wave_pole():
-      # wave_pole = pole.copy()
-      # for i in range(8):
-      #       for g in range(8):
-      #             cv2.putText(wave_pole,str(wave[g][i]),(30+i*80,45+g*80),cv2.FONT_HERSHEY_SIMPLEX,0.5,(0,255,0),2)
-      # images_array[0:690,660:1300] = wave_pole
-      pass
 
 
 def draw_robot():
@@ -611,7 +592,6 @@ def calc_path():
                   super_path.append(der)
                   make_drive(der)
                   # print(dlina,der)
-                  # Wave_pole()
                   # show_pole()
                   # cv2.waitKey()
                   joh += dlina
@@ -649,13 +629,10 @@ def calc_path():
                   cv2.circle(pole_draw, (x * CELL + PAD + 40, y * CELL + PAD + 40), size[j], color[j], -1)
             j += 1
 
-red_color = (36, 28, 237)  # цвет бортика
-
-
 def camera_view():
       # что видит камера робота: 3 ряда по 3 клетки, нос робота смотрит вверх
       # робот стоит в середине нижнего ряда
-      # за полем ничего нет (черное), бортик это красная полоса по краю поля
+      # за полем ничего нет (черное)
       big = cv2.copyMakeBorder(pole, 160, 160, 160, 160, cv2.BORDER_CONSTANT, value=(0, 0, 0))
       y0 = robot_pos[0] * 80 + PAD
       x0 = robot_pos[1] * 80 + PAD
@@ -672,79 +649,54 @@ def camera_view():
       return kvadrat[0:240, 80:320].copy()
 
 
-def detect_red():
-      # ищем бортики только рядом с роботом: на следующей клетке спереди, слева и справа
-      # бортик это красная полоса у края клетки, который ближе к роботу
-      view = camera_view()
-      left = view[160:240, 70:80]
-      front = view[150:160, 80:160]
-      right = view[160:240, 160:170]
-
-      names = ["left", "front", "right"]
-      strips = [left, front, right]
-      red = {}
-      for i in range(3):
-            hsv = cv2.cvtColor(strips[i], cv2.COLOR_BGR2HSV)
-            mask1 = cv2.inRange(hsv, min_red1, max_red1)
-            mask2 = cv2.inRange(hsv, min_red2, max_red2)
-            mask = mask1 + mask2
-            procent = cv2.countNonZero(mask) / mask.size
-            if procent > 0.9:
-                  red[names[i]] = True
-            else:
-                  red[names[i]] = False
-      return red
+def raspoznat_kletku(kletka):
+      # распознаем клетку из кадра камеры: сначала поворачиваем ее, как она лежит на поле
+      global camera
+      if robot_dir == 2:
+            kletka = cv2.rotate(kletka, cv2.ROTATE_90_CLOCKWISE)
+      elif robot_dir == 3:
+            kletka = cv2.rotate(kletka, cv2.ROTATE_180)
+      elif robot_dir == 4:
+            kletka = cv2.rotate(kletka, cv2.ROTATE_90_COUNTERCLOCKWISE)
+      camera = kletka  # detect_cell смотрит в camera
+      return detect_cell()
 
 
 def scan_ahead_4():
       # сканируем 4 клетки буквой Т перед роботом:
       # 0 - слева спереди, 1 - спереди, 2 - справа спереди, 3 - через одну спереди
-      global camera
       view = camera_view()
       cells = [view[80:160, 0:80], view[80:160, 80:160], view[80:160, 160:240], view[0:80, 80:160]]
 
-      # какие клетки за бортиком
-      red = detect_red()
-      out = [False, False, False, False]
-      if red["front"] == True:
-            out = [True, True, True, True]
-      if red["left"] == True:
-            out[0] = True
-      if red["right"] == True:
-            out[2] = True
+      # если датчики видят бортик, клетки за ним не считываем, чтобы не распознать их неправильно
+      left, front, right = red_sensors()
+      skip = [False, False, False, False]
+      if front == True:
+            skip = [True, True, True, True]  # бортик спереди - вся Т за полем
+      if left == True:
+            skip[0] = True
+      if right == True:
+            skip[2] = True
 
-      # дальняя клетка: если внизу у нее красная полоса, это не клетка поля - пропускаем
-      # (бортиком ее не считаем, робот видит бортики только рядом с собой)
-      hsv = cv2.cvtColor(view[70:80, 80:160], cv2.COLOR_BGR2HSV)
-      mask = cv2.inRange(hsv, min_red1, max_red1) + cv2.inRange(hsv, min_red2, max_red2)
-      if cv2.countNonZero(mask) / mask.size > 0.9:
-            out[3] = True
+      # дальнюю клетку датчики не видят: если у ее ближнего к роботу края красная полоса,
+      # значит она за краем поля - тоже не считываем
+      if dolya_krasnogo(view[70:80, 80:160]) > 0.9:  # у бортика 1.0, у клеток поля не больше 0.17
+            skip[3] = True
 
-      saved = camera
       imgs = []
+      codes = []  # коды клеток для slam_map, 0 - клетку не считывали
       for i in range(4):
-            if out[i] == True:
+            if skip[i] == True:
                   imgs.append(None)
-            else:
-                  kletka = cells[i]
-                  # поворачиваем клетку обратно, как она лежит на поле
-                  if robot_dir == 2:
-                        kletka = cv2.rotate(kletka, cv2.ROTATE_90_CLOCKWISE)
-                  elif robot_dir == 3:
-                        kletka = cv2.rotate(kletka, cv2.ROTATE_180)
-                  elif robot_dir == 4:
-                        kletka = cv2.rotate(kletka, cv2.ROTATE_90_COUNTERCLOCKWISE)
-                  camera = kletka
-                  img = cv2.imread("img/" + str(detect_cell()) + ".png")
-                  if img is None:
-                        img = camera
-                  imgs.append(img)
-
-      if imgs[1] is not None:
-            camera = imgs[1]
-      else:
-            camera = saved
-      return imgs
+                  codes.append(0)
+                  continue
+            code = raspoznat_kletku(cells[i])
+            img = cv2.imread("img/" + str(code) + ".png")
+            if img is None:
+                  img = camera  # картинки для такого кода нет - показываем саму клетку
+            imgs.append(img)
+            codes.append(code)
+      return imgs, codes
 
 
 def draw_scan_panel(imgs):
@@ -789,20 +741,229 @@ def draw_scan_panel(imgs):
       robot_img = cv2.imread("img/robot.png")
       images_array[ry:ry + 40, rx:rx + 40] = cv2.resize(robot_img, (40, 40))
 
-      # бортики рисуем красными линиями вокруг робота
-      red = detect_red()
-      if red["front"] == True:
-            cv2.line(images_array, (rx, ry), (rx + 40, ry), red_color, 3)
-      if red["left"] == True:
-            cv2.line(images_array, (rx, ry), (rx, ry + 40), red_color, 3)
-      if red["right"] == True:
-            cv2.line(images_array, (rx + 40, ry), (rx + 40, ry + 40), red_color, 3)
-
       # область интереса - клетка прямо перед роботом, внизу панели
       roi = camera_view()[80:160, 80:160]
       images_array[600:680, 710:790] = roi
 
       cv2.imshow("pole", images_array)
+
+
+def dolya_krasnogo(kusok):
+      # какая часть картинки красная: от 0 до 1
+      hsv = cv2.cvtColor(kusok, cv2.COLOR_BGR2HSV)
+      mask = cv2.inRange(hsv, min_red1, max_red1) + cv2.inRange(hsv, min_red2, max_red2)
+      return cv2.countNonZero(mask) / mask.size
+
+
+def red_sensors():
+      # 3 маленьких датчика 8x8 пикселей: ровно слева, ровно спереди и ровно справа от робота
+      # каждый датчик наполовину на клетке робота, наполовину на соседней клетке
+      # возвращает [слева, спереди, справа]: True - датчик видит красный бортик
+      view = camera_view()  # робот в середине нижнего ряда, клетка робота view[160:240, 80:160]
+      centers = [(200, 80), (160, 120), (200, 160)]  # центры датчиков (y, x): слева, спереди, справа
+      result = []
+      for cy, cx in centers:
+            kusok = view[cy - 4:cy + 4, cx - 4:cx + 4]
+            result.append(dolya_krasnogo(kusok) > 0.4)  # у бортика 0.5-0.73, у клеток поля не больше 0.23
+      return result
+
+
+def sensor_napravleniya(d):
+      # куда смотрят датчики [слева, спереди, справа] при направлении робота d, как (dx, dy)
+      if d == 1:
+            fx, fy = 0, -1
+      elif d == 2:
+            fx, fy = 1, 0
+      elif d == 3:
+            fx, fy = 0, 1
+      else:
+            fx, fy = -1, 0
+      return [(fy, -fx), (fx, fy), (-fy, fx)]
+
+
+def obnovit_granitsy(sy, sx, sdir, sensors):
+      # датчик видит бортик -> знаем край поля в slam_map
+      # поле всегда 8x8, поэтому сразу знаем и противоположный край
+      napravleniya = sensor_napravleniya(sdir)
+      for i in range(3):
+            if sensors[i] == True:
+                  vx, vy = napravleniya[i]
+                  if vy == -1:  # бортик сверху: строка робота - верхняя строка поля
+                        granitsy["top"] = sy
+                        granitsy["bottom"] = sy + 7
+                  elif vy == 1:  # бортик снизу
+                        granitsy["bottom"] = sy
+                        granitsy["top"] = sy - 7
+                  elif vx == -1:  # бортик слева
+                        granitsy["left"] = sx
+                        granitsy["right"] = sx + 7
+                  else:  # бортик справа
+                        granitsy["right"] = sx
+                        granitsy["left"] = sx - 7
+
+
+def v_pole_slam(y, x):
+      # клетка (y, x) slam_map может быть клеткой поля: внутри карты 17x17 и внутри известных краев
+      if y < 0 or y > 16 or x < 0 or x > 16:
+            return False
+      if granitsy["top"] is not None and (y < granitsy["top"] or y > granitsy["bottom"]):
+            return False
+      if granitsy["left"] is not None and (x < granitsy["left"] or x > granitsy["right"]):
+            return False
+      return True
+
+
+def mozhno_ehat(y, x, ny, nx, sy, sx):
+      # можно ли по slam_map проехать из клетки (y, x) в соседнюю (ny, nx) по правилам dict_p
+      # (sy, sx) - где стоит робот: если клетку под ним не распознали, считаем ее полом 1 этажа
+      if not v_pole_slam(ny, nx):
+            return False
+      kod = slam_map[y][x]
+      if y == sy and x == sx and kod == 0:
+            kod = 1
+      razresheno = dict_p.get(str(kod))
+      if razresheno is None:
+            return False  # труба, подставка или непонятная клетка - через нее не едем
+      if ny < y:
+            k = 0
+      elif nx > x:
+            k = 1
+      elif ny > y:
+            k = 2
+      else:
+            k = 3
+      return slam_map[ny][nx] in razresheno[k]
+
+
+def vidit_neizvestnoe(y, x, d):
+      # увидит ли камера (буква Т) из клетки (y, x) при направлении d хоть одну неизвестную клетку поля
+      for dx, dy in offsets_T[d]:
+            ny = y + dy
+            nx = x + dx
+            if v_pole_slam(ny, nx) and slam_map[ny][nx] == 0 and (ny, nx) not in plohie:
+                  return True
+      return False
+
+
+def plan_issledovaniya(sy, sx, sdir):
+      # поиск в ширину по состояниям (клетка, направление). Каждое действие стоит 1:
+      # шаг вперед или поворот на 90 градусов. Так робот не делает лишних поворотов.
+      # Цель - состояние, из которого камера увидит неизвестную клетку поля.
+      # возвращает план [(y, x, d), ...] от робота до цели, или None, если смотреть больше нечего
+      shagi = {1: (-1, 0), 2: (0, 1), 3: (1, 0), 4: (0, -1)}
+      otkuda = {(sy, sx, sdir): None}
+      ochered = [(sy, sx, sdir)]
+      i = 0
+      while i < len(ochered):
+            y, x, d = ochered[i]
+            i += 1
+            if vidit_neizvestnoe(y, x, d):
+                  plan = [(y, x, d)]
+                  while otkuda[(y, x, d)] is not None:
+                        y, x, d = otkuda[(y, x, d)]
+                        plan.append((y, x, d))
+                  plan.reverse()
+                  return plan
+
+            sosedi = []
+            ny = y + shagi[d][0]
+            nx = x + shagi[d][1]
+            if mozhno_ehat(y, x, ny, nx, sy, sx):
+                  sosedi.append((ny, nx, d))      # вперед
+            sosedi.append((y, x, d % 4 + 1))       # поворот направо
+            sosedi.append((y, x, (d + 2) % 4 + 1)) # поворот налево
+            for s in sosedi:
+                  if s not in otkuda:
+                        otkuda[s] = (y, x, d)
+                        ochered.append(s)
+      return None
+
+
+def kletki_plana(plan):
+      # клетки, через которые проходит план (без повторов) - чтобы нарисовать путь на карте
+      if plan is None:
+            return None
+      put = []
+      for y, x, d in plan:
+            if (y, x) not in put:
+                  put.append((y, x))
+      return put
+
+
+def vse_naideno(sy, sx):
+      # можно заканчивать исследование: известны края поля, найдены 3 трубы и подставка,
+      # и до каждой трубы и до подставки можно доехать по уже известным клеткам
+      if granitsy["top"] is None or granitsy["left"] is None:
+            return False
+      tubes = []
+      stands = []
+      for y in range(17):
+            for x in range(17):
+                  if slam_map[y][x] in (151, 152, 251, 252, 121, 122, 221, 222):
+                        tubes.append((y, x))
+                  if slam_map[y][x] in (31, 32, 33, 34):
+                        stands.append((y, x))
+      if len(tubes) != 3 or len(stands) < len(tubes):  # на подставке нужно место под каждую трубу
+            return False
+
+      # куда можно доехать от робота по известным клеткам
+      byl = [[False for _ in range(17)] for _ in range(17)]
+      byl[sy][sx] = True
+      ochered = [(sy, sx)]
+      i = 0
+      while i < len(ochered):
+            y, x = ochered[i]
+            i += 1
+            for dy, dx in [(-1, 0), (0, 1), (1, 0), (0, -1)]:
+                  ny = y + dy
+                  nx = x + dx
+                  if mozhno_ehat(y, x, ny, nx, sy, sx) and not byl[ny][nx]:
+                        byl[ny][nx] = True
+                        ochered.append((ny, nx))
+
+      # к трубе и подставке подъезжаем сбоку, с разрешенной стороны (dict_tube, как в FindPath)
+      celi = tubes + [stands[len(stands) // 2]]  # calc_path берет среднюю клетку подставки
+      for ty, tx in celi:
+            pod = dict_tube.get(str(slam_map[ty][tx]))
+            mozhno = False
+            for k, (dy, dx) in enumerate([(-1, 0), (0, 1), (1, 0), (0, -1)]):
+                  ny = ty + dy
+                  nx = tx + dx
+                  if v_pole_slam(ny, nx) and byl[ny][nx] and slam_map[ny][nx] in pod[k]:
+                        mozhno = True
+            if not mozhno:
+                  return False
+      return True
+
+
+def draw_sensors():
+      # рамки датчиков вокруг робота на поле и телеметрия между картами
+      sensors = red_sensors()
+
+      # рамки датчиков на поле (зеленые)
+      px = robot_pos[1] * 80 + PAD + 40  # центр клетки робота
+      py = robot_pos[0] * 80 + PAD + 40
+      napravleniya = sensor_napravleniya(robot_dir)  # слева, спереди, справа
+      for vx, vy in napravleniya:
+            sx = px + vx * 40
+            sy = py + vy * 40
+            cv2.rectangle(images_array, (sx - 4, sy - 4), (sx + 4, sy + 4), (0, 255, 0), 1)
+
+      # телеметрия: 3 прямоугольника между картами, красный - датчик видит бортик
+      names = ["L", "F", "R"]
+      images_array[10:100, 690:810] = (0, 0, 0)
+      for i in range(3):
+            x = 698 + i * 38
+            if sensors[i] == True:
+                  color = (0, 0, 255)
+            else:
+                  color = (60, 60, 60)
+            cv2.rectangle(images_array, (x, 30), (x + 28, 58), color, -1)
+            cv2.rectangle(images_array, (x, 30), (x + 28, 58), (255, 255, 255), 1)
+            cv2.putText(images_array, names[i], (x + 9, 78), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+      cv2.imshow("pole", images_array)
+      return sensors
 
 
 def key_drive(t=1):
@@ -812,6 +973,7 @@ def key_drive(t=1):
       F_UP, F_DOWN, F_LEFT, F_RIGHT, F_SPACE = 0x260000, 0x280000, 0x250000, 0x270000, 0x320000
 
       show_pole()
+      draw_sensors()
       cv2.waitKey(1)
 
       while True:
@@ -848,17 +1010,18 @@ def key_drive(t=1):
             elif action == "left":
                   rotate(0)
                   show_pole()
-                  draw_scan_panel(scan_ahead_4())
-
+                  draw_scan_panel(scan_ahead_4()[0])
+                  draw_sensors()  # после каждого движения проверяем бортики датчиками
 
             elif action == "right":
                   rotate(1)
                   show_pole()
-                  draw_scan_panel(scan_ahead_4())
-
+                  draw_scan_panel(scan_ahead_4()[0])
+                  draw_sensors()
 
             elif action == "space":
-                  draw_scan_panel(scan_ahead_4())
+                  draw_scan_panel(scan_ahead_4()[0])
+                  draw_sensors()
 
             elif action in ("up", "down"):
                   sign = +1 if action == "up" else -1
@@ -900,79 +1063,9 @@ def key_drive(t=1):
                   delay = t + 10 if target_cell in (61, 62, 63, 64) else t
                   robot_move(new_y, new_x, delay)
                   show_pole()
-                  draw_scan_panel(scan_ahead_4())
+                  draw_scan_panel(scan_ahead_4()[0])
+                  draw_sensors()
                   cv2.waitKey(1)
-
-def scan():
-    global camera
-    y, x = robot_pos
-
-    ny, nx = y, x
-    if robot_dir == 1:   ny = y - 1
-    elif robot_dir == 3: ny = y + 1
-    elif robot_dir == 2: nx = x + 1
-    elif robot_dir == 4: nx = x - 1
-
-    if not (0 <= ny <= 7 and 0 <= nx <= 7):
-        return  # смотрим в стену — сканировать нечего
-
-    cell = map_draw[ny][nx]
-    path = "img/" + str(cell) + ".png"
-    camera = cv2.imread(path)
-    if camera is None:
-        print(f"WARNING: не удалось загрузить {path!r}")
-        return
-    # cv2.imshow("camera", camera)
-    # cv2.moveWindow("camera", 100, 100)
-
-def scan_cords(y,x):
-      global camera
-      cell = map_draw[y][x]
-      path = "img/" + str(cell) + ".png"
-      camera = cv2.imread(path)
-      if camera is None:
-            print(f"WARNING: не удалось загрузить {path!r}")
-            return
-
-def find_green():
-    global camera
-
-    if camera is None:
-        print("camera пустая — сначала нажмите SPACE для сканирования")
-        return None
-
-    # 1. Переводим в HSV и строим маску по заданным границам
-    hsv = cv2.cvtColor(camera, cv2.COLOR_BGR2HSV)
-    mask = cv2.inRange(hsv, min_green, max_green)
-
-    # 2. Чистим маску от шума (морфология)
-    kernel = np.ones((5, 5), np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  kernel)  # убирает мелкие точки
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)  # закрывает дырки
-
-    # 3. Ищем контуры
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    # 4. Рисуем прямоугольники вокруг достаточно крупных контуров
-    result = camera.copy()
-    found = []
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-        if area < 100:          # отсекаем мелкие артефакты — подберите под масштаб
-            continue
-
-        x, y, w, h = cv2.boundingRect(cnt)   # прямоугольник, описывающий контур
-        cv2.rectangle(result, (x, y), (x + w, y + h), (0, 0, 255), 2)
-
-        # центр объекта — пригодится для навигации
-        cx, cy = x + w // 2, y + h // 2
-        cv2.circle(result, (cx, cy), 4, (255, 0, 0), -1)
-        found.append({"rect": (x, y, w, h), "center": (cx, cy), "area": area})
-
-    # cv2.imshow("green mask", mask)
-    cv2.imshow("green found", result)
-
-    return found
 
 def find_col(col):
       global camera
@@ -1089,284 +1182,321 @@ def detect_cell():
 
       return kletka
 
-def detect_robot():
-      global camera, images_array,posu
-      posu = 0
-      saved_camera = camera
-      for y in range(8):
-            for x in range(8):
-                  camera = pole_draw[y*CELL+PAD:(y+1)*CELL+PAD, x*CELL+PAD:(x+1)*CELL+PAD].copy()
-                  cell_id = detect_cell()
-                  if cell_id in (1511,152,153,154):
-                        posu = cell_id
-                        camera = saved_camera
-                        return [y, x]
-      camera = saved_camera
-      return [0, 0]
-
-def sputnik():
-    global camera, images_array,new_map
-    saved_camera = camera
-    new_map = [[0 for _ in range(8)] for _ in range(8)]
-    for y in range(8):
-        for x in range(8):
-            cell_img = pole[y*CELL+PAD:(y+1)*CELL+PAD, x*CELL+PAD:(x+1)*CELL+PAD].copy()
-            camera = cell_img
-            cell_id = detect_cell()
-            new_map[y][x] = cell_id
-    camera = saved_camera
-
-    images_array[0:640, 660:1300] = (40, 40, 40)
-    for y in range(8):
-        for x in range(8):
-            cell_id = new_map[y][x]
-            path = f"img/{cell_id}.png"
-            img = cv2.imread(path)
-            ty = y * 80
-            tx = 660 + x * 80
-            images_array[ty:ty + 80, tx:tx + 80] = img
-            cv2.putText(images_array, str(cell_id),(tx + 3, ty + 15),cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 100), 3)
-    images_array = cv2.rectangle(images_array, (640, 0), (660, 640),(0, 250, 255), -1)
-    cv2.imshow("pole", images_array)
-
-    print("sputnik: новая карта")
-    for row in new_map:
-        print(" ".join(f"{v:>4}" for v in row))
-
-    return new_map
-
-def sputnik_go():
-    global robot_dir, robot_pos, map_draw, new_map, pole_draw,posu
-
-    # --- 1. Стартовое состояние ---
-    draw_robot()
-    draw_pole()
-    show_pole()
-    cv2.waitKey(1)
-
-    # --- 2. Сканирование карты ---
-    new_map = sputnik()
-
-    # --- 3. Робот и его направление ---
-    #     detect_cell() возвращает 1511/152/153/154 для маркера робота
-    robot_pos = detect_robot()
-    marker = posu
-
-    if   marker == 1511: robot_dir = 1
-    elif marker == 152:  robot_dir = 2
-    elif marker == 153:  robot_dir = 3
-    elif marker == 154:  robot_dir = 4
-    else:
-        print(f"WARN: робот не найден (marker={marker} в {robot_pos})")
-        return
-
-    # --- 4. Подмена карты на распознанную ---
-    map_draw = [row[:] for row in new_map]
-    pole_draw = pole.copy()
-    draw_robot()
-    draw_pole()
-    show_pole()
-    cv2.waitKey(1)
-
-    # --- 5. Кратчайший маршрут по всем трубам ---
-    tubes = [[y, x] for y in range(8) for x in range(8)
-             if map_draw[y][x] in (151, 152, 251, 252, 121, 122, 221, 222)]
-    stands = [[y, x] for y in range(8) for x in range(8) if map_draw[y][x] in (31, 32, 33, 34)]
-    if len(tubes) != 3 or not stands:  # calc_path перебирает ровно 3 трубы
-        print(f"WARN: нужно 3 трубы и подставка, найдено труб={len(tubes)}, подставок={len(stands)}")
-        return
-    trubi[:] = [robot_pos] + tubes + [stands[len(stands) // 2]]
-    calc_path()
-
-    # --- 6. Показать маршрут ---
-    pole_draw = pole.copy()
-    draw_robot()
-    size  = [20, 15, 10, 5]
-    color = [(0,0,255), (0,255,255), (255,0,0), (0,255,0)]
-    for j, leg in enumerate(fin_path):
-        for y, x in leg:
-            cv2.circle(pole_draw, (x*CELL+PAD+40, y*CELL+PAD+40), size[j], color[j], -1)
-    draw_pole()
-    show_pole()
-    cv2.waitKey()
-
-    # --- 7. Проехать маршрут ---
-    for j, leg in enumerate(fin_path):
-        if not leg or leg == [[-1, -1]]:
-            print(f"WARN: участок {j} не найден, пропускаю")
-            continue
-        make_drive(leg)
-        drive(1)
-        draw_robot()
-        draw_pole()
-        show_pole()
-        cv2.waitKey()
-
-    print(f"sputnik_go: готово, финиш {robot_pos}, dir={robot_dir}")
-    cv2.waitKey(0)
+# где на карте клетки буквы Т (dx, dy) для каждого направления робота
+# порядок: слева спереди, спереди, справа спереди, через одну спереди
+offsets_T = {
+      1: [(-1, -1), (0, -1), (1, -1), (0, -2)],
+      2: [(1, -1), (1, 0), (1, 1), (2, 0)],
+      3: [(1, 1), (0, 1), (-1, 1), (0, 2)],
+      4: [(-1, 1), (-1, 0), (-1, -1), (-2, 0)]
+}
+polosy = []   # бортики с датчиков: (y, x, vx, vy) - у клетки (y, x) в сторону (vx, vy)
+plohie = []   # клетки, на которые робот смотрел, но так и не распознал - больше к ним не едем
 
 
-def draw_corners():
-      # если две красные клетки сходятся углом, рисуем между ними красную клетку - угол поля
-      # bort_map: 0 - не знаем, 1 - поле, 2 - бортик (slam_map только для кодов клеток)
+def slam_skan(sy, sx):
+      # робот в клетке (sy, sx) slam_map смотрит по robot_dir:
+      # сканирует Т, записывает коды в slam_map, датчиками ищет бортики
+      imgs, codes = scan_ahead_4()
+      for i in range(4):
+            if imgs[i] is None:  # клетка за бортиком, не считывали
+                  continue
+            dx, dy = offsets_T[robot_dir][i]
+            slam_map[sy + dy][sx + dx] = codes[i]
+
+      sensors = red_sensors()  # [слева, спереди, справа]
+      obnovit_granitsy(sy, sx, robot_dir, sensors)
+      napravleniya = sensor_napravleniya(robot_dir)
+      for i in range(3):
+            if sensors[i] == True:
+                  vx, vy = napravleniya[i]
+                  if (sy, sx, vx, vy) not in polosy:
+                        polosy.append((sy, sx, vx, vy))
+      return imgs
+
+
+def draw_slam_map(sy, sx, put):
+      # рисуем вторую карту заново: известные клетки, бортики, края поля, путь и робота
       S = 40
+      images_array[0:690, 810:1500] = (0, 0, 0)
       for y in range(17):
             for x in range(17):
-                  if bort_map[y][x] != 0:
-                        continue
-                  for dy in [-1, 1]:
-                        for dx in [-1, 1]:
-                              if 0 <= y + dy < 17 and 0 <= x + dx < 17:
-                                    # бортик сверху/снизу и слева/справа, а по диагонали поле -> это угол
-                                    if bort_map[y + dy][x] == 2 and bort_map[y][x + dx] == 2 and bort_map[y + dy][x + dx] == 1:
-                                          bort_map[y][x] = 2
-                                          images_array[y * S:(y + 1) * S, 810 + x * S:810 + (x + 1) * S] = red_color
+                  if slam_map[y][x] != 0:
+                        img = cv2.imread("img/" + str(slam_map[y][x]) + ".png")
+                        if img is not None:
+                              images_array[y * S:y * S + S, 810 + x * S:810 + x * S + S] = cv2.resize(img, (S, S))
+
+      # бортики красной полосой у края клетки, как на настоящем поле
+      T = 12  # толщина полосы: бортик 25 px на клетку 80 px, у нас клетка 40 px
+      for y, x, vx, vy in polosy:
+            x0 = 810 + x * S
+            y0 = y * S
+            if vx == 1:
+                  images_array[y0:y0 + S, x0 + S:x0 + S + T] = (0, 0, 255)
+            elif vx == -1:
+                  images_array[y0:y0 + S, x0 - T:x0] = (0, 0, 255)
+            elif vy == 1:
+                  images_array[y0 + S:y0 + S + T, x0:x0 + S] = (0, 0, 255)
+            else:
+                  images_array[y0 - T:y0, x0:x0 + S] = (0, 0, 255)
+
+      # известные края поля тонкими красными линиями через всю карту
+      if granitsy["top"] is not None:
+            y1 = granitsy["top"] * S
+            y2 = (granitsy["bottom"] + 1) * S
+            cv2.line(images_array, (810, y1), (810 + 17 * S, y1), (0, 0, 255), 2)
+            cv2.line(images_array, (810, y2), (810 + 17 * S, y2), (0, 0, 255), 2)
+      if granitsy["left"] is not None:
+            x1 = 810 + granitsy["left"] * S
+            x2 = 810 + (granitsy["right"] + 1) * S
+            cv2.line(images_array, (x1, 0), (x1, 17 * S), (0, 0, 255), 2)
+            cv2.line(images_array, (x2, 0), (x2, 17 * S), (0, 0, 255), 2)
+
+      # путь до неизвестного: зеленые точки, цель - синяя рамка
+      if put is not None:
+            for y, x in put:
+                  cv2.circle(images_array, (810 + x * S + S // 2, y * S + S // 2), 5, (0, 255, 0), -1)
+            ty, tx = put[-1]
+            cv2.rectangle(images_array, (810 + tx * S, ty * S), (810 + tx * S + S - 1, ty * S + S - 1), (255, 0, 0), 2)
+
+      # робот, повернут как сейчас
+      images_array[sy * S:sy * S + S, 810 + sx * S:810 + sx * S + S] = cv2.resize(robot, (S, S))
+
+
+def pokazat_vse(sy, sx, put, imgs):
+      # обновляем окно: поле, вторую карту, панель скана и датчики
+      draw_slam_map(sy, sx, put)
+      show_pole()
+      draw_scan_panel(imgs)
+      draw_sensors()
+
+
+def print_slam_map(sy, sx):
+      # печатаем, что робот узнал (0 - не знаем, R - сам робот)
+      print("границы поля в slam_map:", granitsy)
+      if granitsy["top"] is not None and granitsy["left"] is not None:
+            print("робот на поле в клетке (y, x):", sy - granitsy["top"], sx - granitsy["left"])
+      for y in range(17):
+            stroka = ""
+            for x in range(17):
+                  if y == sy and x == sx:
+                        stroka += "   R"
+                  else:
+                        stroka += "%4d" % slam_map[y][x]
+            print(stroka)
+
+
+def skan_pod_soboi():
+      # сканируем клетку, на которой стоит робот (в camera_view это середина нижнего ряда)
+      return raspoznat_kletku(camera_view()[160:240, 80:160])
 
 
 def slam_step1():
+      # робот крутится на месте и осматривается; он стоит в центре slam_map (8, 8)
       global robot_dir
-
       robot_dir = 1
       draw_robot()
       show_pole()
+      cv2.waitKey(0)  # ждём любую клавишу, потом робот сам крутится и считывает
 
-      images_array[0:690, 810:1500] = (0, 0, 0)
+      slam_map[8][8] = skan_pod_soboi()  # сначала клетка под собой
+      print("робот стоит на клетке:", slam_map[8][8])
 
-      S = 40
-      cx, cy = 8, 8
-
-      # где на карте клетки буквы Т (dx, dy) для каждого направления робота
-      # порядок: слева спереди, спереди, справа спереди, через одну спереди
-      offsets = {
-            1: [(-1, -1), (0, -1), (1, -1), (0, -2)],
-            2: [(1, -1), (1, 0), (1, 1), (2, 0)],
-            3: [(1, 1), (0, 1), (-1, 1), (0, 2)],
-            4: [(-1, 1), (-1, 0), (-1, -1), (-2, 0)]
-      }
-      # где на карте клетки слева и справа от робота (dx, dy)
-      sides = {
-            1: [(-1, 0), (1, 0)],
-            2: [(0, -1), (0, 1)],
-            3: [(1, 0), (-1, 0)],
-            4: [(0, 1), (0, -1)]
-      }
-      cv2.waitKey(0)
       for _ in range(4):
-            imgs = scan_ahead_4()
-            # рисуем отсканированные клетки на карте
-            bort_map[cy][cx] = 1  # клетка робота - это поле
-            for i in range(4):
-                  if imgs[i] is not None:
-                        dx, dy = offsets[robot_dir][i]
-                        tx = 810 + (cx + dx) * S
-                        ty = (cy + dy) * S
-                        images_array[ty:ty + S, tx:tx + S] = cv2.resize(imgs[i], (S, S))
-                        bort_map[cy + dy][cx + dx] = 1  # 1 - поле
+            imgs = slam_skan(8, 8)
+            pokazat_vse(8, 8, None, imgs)
+            cv2.waitKey(500)  # пауза, чтобы было видно скан
+            rotate(1)
+      # после 4 поворотов робот снова смотрит вверх
 
-            # бортики рисуем на карте красными клетками
-            red = detect_red()
-            krasnye = []
-            # клетки Т за бортиком (если бортик прямо спереди, Т не красим)
-            # дальнюю клетку (3) не красим - там робот бортик не видит
-            if red["front"] == False:
-                  for i in range(3):
-                        if imgs[i] is None:
-                              krasnye.append(offsets[robot_dir][i])
-            # клетки слева и справа от робота
-            if red["left"] == True:
-                  krasnye.append(sides[robot_dir][0])
-            if red["right"] == True:
-                  krasnye.append(sides[robot_dir][1])
-            for dx, dy in krasnye:
-                  tx = 810 + (cx + dx) * S
-                  ty = (cy + dy) * S
-                  images_array[ty:ty + S, tx:tx + S] = red_color
-                  bort_map[cy + dy][cx + dx] = 2  # 2 - бортик
-            draw_corners()
+      plan = plan_issledovaniya(8, 8, robot_dir)
+      print("план до неизвестного:", plan)
+      draw_slam_map(8, 8, kletki_plana(plan))
+      show_pole()
+      cv2.waitKey(1)
+      print("slam_map после осмотра:")
+      print_slam_map(8, 8)
 
-            # сначала показываем, потом поворачиваем, чтобы панель совпадала с роботом на поле
+
+def povernut_v(nado):
+      # поворачиваем робота в направление nado (1 - вверх, 2 - вправо, 3 - вниз, 4 - влево)
+      r = rotate_pro(nado)
+      if r != 59:  # 59 - уже смотрим куда надо
+            rotate(r - 60)
+
+
+def slam_explore(t=300):
+      # главный цикл SLAM: по плану делаем одно действие (шаг или поворот), сканируем, планируем снова
+      # робот знает только себя в slam_map (sy, sx) и свое направление robot_dir
+      sy, sx = 8, 8
+      imgs = [None, None, None, None]
+      shagov = 0
+      while shagov < 300:  # защита от вечного цикла
+            if vse_naideno(sy, sx):
+                  print("slam_explore: трубы и подставка найдены, до них можно доехать, шагов:", shagov)
+                  break
+            plan = plan_issledovaniya(sy, sx, robot_dir)
+            if plan is None:
+                  print("slam_explore: всё, что можно, осмотрено, шагов:", shagov)
+                  break
+
+            if len(plan) > 1:
+                  ny, nx, nd = plan[1]
+                  if nd != robot_dir:
+                        povernut_v(nd)
+                  else:
+                        # это "мир": настоящий робот на поле едет туда же, куда робот думает
+                        robot_move(robot_pos[0] + ny - sy, robot_pos[1] + nx - sx, 1)
+                        sy, sx = ny, nx
+                  shagov += 1
+            imgs = slam_skan(sy, sx)
+
+            # клетки Т, которые после скана остались неизвестными, больше не ждем (не распознали)
+            for dx, dy in offsets_T[robot_dir]:
+                  ny = sy + dy
+                  nx = sx + dx
+                  if v_pole_slam(ny, nx) and slam_map[ny][nx] == 0 and (ny, nx) not in plohie:
+                        plohie.append((ny, nx))
+
+            pokazat_vse(sy, sx, kletki_plana(plan_issledovaniya(sy, sx, robot_dir)), imgs)
+            cv2.waitKey(t)
+
+      print("slam_map после исследования:")
+      print_slam_map(sy, sx)
+      return sy, sx
+
+
+def vyrezat_8x8():
+      # вырезаем поле 8x8 из slam_map по найденным краям поля
+      karta = []
+      for y in range(8):
+            stroka = []
+            for x in range(8):
+                  kod = slam_map[granitsy["top"] + y][granitsy["left"] + x]
+                  if kod == 0:
+                        # неизвестную клетку пишем -1: в dict_p и dict_tube [0] значит "нельзя",
+                        # и 0 там совпал бы с этим "нельзя" - Wave и FindPath поехали бы в неизвестное
+                        kod = -1
+                  stroka.append(kod)
+            karta.append(stroka)
+      return karta
+
+
+def slam_zadanie(sy, sx):
+      # этап 5: по карте, которую робот собрал сам, едем по трубам к подставке (как sputnik_go в simulator_sputnik.py)
+      global map_draw, pole_draw
+      if granitsy["top"] is None or granitsy["left"] is None:
+            print("slam_zadanie: края поля не найдены - не знаю, где я на поле")
+            return
+
+      map_draw = vyrezat_8x8()
+      ry = sy - granitsy["top"]  # где робот на поле по SLAM
+      rx = sx - granitsy["left"]
+      print("slam_zadanie: карта поля, которую собрал робот:")
+      for stroka in map_draw:
+            print(" ".join("%4d" % v for v in stroka))
+      print("робот по SLAM в клетке", [ry, rx], ", на самом деле", robot_pos)
+
+      # трубы и подставка из собранной карты
+      tubes = []
+      stands = []
+      for y in range(8):
+            for x in range(8):
+                  if map_draw[y][x] in (151, 152, 251, 252, 121, 122, 221, 222):
+                        tubes.append([y, x])
+                  if map_draw[y][x] in (31, 32, 33, 34):
+                        stands.append([y, x])
+      if len(tubes) != 3 or len(stands) == 0:  # calc_path перебирает ровно 3 трубы
+            print("slam_zadanie: нужно 3 трубы и подставка, найдено труб", len(tubes), ", подставок", len(stands))
+            return
+      trubi[:] = [[ry, rx]] + tubes + [stands[len(stands) // 2]]
+      fin_path.clear()
+      v_robote.clear()
+      calc_path()
+
+      # показываем маршрут на поле
+      pole_draw = pole.copy()
+      draw_robot()
+      size = [20, 15, 10, 5]
+      color = [(0, 0, 255), (0, 255, 255), (255, 0, 0), (0, 255, 0)]
+      for j in range(len(fin_path)):
+            for y, x in fin_path[j]:
+                  cv2.circle(pole_draw, (x * CELL + PAD + 40, y * CELL + PAD + 40), size[j], color[j], -1)
+      show_pole()
+      cv2.waitKey(1000)
+
+      # едем по маршруту: к каждой трубе, потом к подставке
+      for j in range(len(fin_path)):
+            if fin_path[j][0] == [-1, -1]:  # FindPath не нашел путь (calc_path дописывает цель в конец)
+                  print("slam_zadanie: участок", j, "не найден, пропускаю")
+                  continue
+            make_drive(fin_path[j])
+            drive(1)
+            if j < 3:  # первые 3 участка ведут к трубам - забираем трубу
+                  ty, tx = fin_path[j][-1]  # последняя клетка участка - сама труба
+                  zabrat_trubu(ty, tx)
+            else:  # последний участок ведет к зеленой подставке - выгружаем трубы
+                  vygruzit_truby()
+            # вторая карта: робот на новом месте, забранные трубы уже пустые подставки
+            draw_slam_map(granitsy["top"] + robot_pos[0], granitsy["left"] + robot_pos[1], None)
+            draw_robot()
             show_pole()
-            draw_scan_panel(imgs)
-            cv2.waitKey(0)
-            rotate(1)
-
-      while robot_dir != 1:
-            rotate(1)
-            show_pole() 
-            cv2.waitKey(100)
-
-      cv2.waitKey(0)
+            cv2.waitKey(500)
+      print("slam_zadanie: готово, робот в", robot_pos)
 
 
+def zamenit_kletku(ty, tx, novyi):
+      # клетка (ty, tx) поля стала другой (новый код novyi): меняем ее на поле, в map_draw и в slam_map
+      img = cv2.imread("img/" + str(novyi) + ".png")
+      if img is None:
+            print("нет картинки img/" + str(novyi) + ".png")
+            return False
+      y0 = ty * CELL + PAD
+      x0 = tx * CELL + PAD
+      pole[y0:y0 + CELL, x0:x0 + CELL] = img       # самое поле - его видит камера
+      pole_draw[y0:y0 + CELL, x0:x0 + CELL] = img  # то, что нарисовано в окне
+      map_draw[ty][tx] = novyi
+      slam_map[granitsy["top"] + ty][granitsy["left"] + tx] = novyi  # карта робота (вторая карта)
+      return True
 
-robot_pos = [0, 7]   # стартовая клетка (y, x)
-# draw_robot()
-# draw_pole()
-# show_pole()
-# cv2.waitKey(1)
-#
-# key_drive(1)
-# cv2.waitKey(0)
 
-slam_step1()
+v_robote = []  # коды труб, которые робот везет
 
 
+def zabrat_trubu(ty, tx):
+      # робот забрал трубу из клетки (ty, tx) поля: на ее месте остается пустая подставка
+      # код пустой подставки = код трубы с 0 на конце (121 -> 1210)
+      kod = map_draw[ty][tx]
+      if kod not in (151, 152, 251, 252, 121, 122, 221, 222):
+            return
+      if zamenit_kletku(ty, tx, kod * 10):
+            v_robote.append(kod)
+            print("забрали трубу", kod, "из клетки", [ty, tx], "- везем", v_robote)
 
-# cords = "1"
-# start = pole[2][3]
-# print(start)
-# print(1 in dict_p.get(str(start))[0])
-# robot_pos = [4,4] # y x
-# draw_robot()
-# draw_pole()
-# cv2.imshow("pole", pole_dra)
 
-# sputnik_go()
-# robot_pos = [4, 4]
-# draw_robot()
-# draw_pole()
-# show_pole()
-# # key_drive(1)
-# cv2.waitKey()
-# robot_pos = detect_robot()
-# print(robot_pos)
-# sputnik()
-# calc_path()
-# draw_robot()
-# draw_pole()
-# show_pole()
-#
-# cv2.waitKey()
-# for i in range(4):
-#       make_drive(fin_path[i])
-#       print(fin_path[i])
-#       print(move)
-#       drive(1)
-#       print(robot_pos)
-#       cv2.waitKey()
+def vygruzit_truby():
+      # робот у зеленой подставки: кладет трубы, которые везет, на клетки подставки по одной
+      # код подставки с трубой = код подставки + цвет трубы (31 + синяя -> 312, 31 + красная -> 315)
+      for y in range(8):
+            for x in range(8):
+                  if map_draw[y][x] in (31, 32, 33, 34) and len(v_robote) > 0:
+                        kod = v_robote[0]
+                        cvet = (kod // 10) % 10  # средняя цифра кода трубы: 2 - синяя, 5 - красная
+                        if zamenit_kletku(y, x, map_draw[y][x] * 10 + cvet):
+                              v_robote.pop(0)
+                              print("положили трубу", kod, "на подставку", [y, x])
+      if len(v_robote) > 0:
+            print("vygruzit_truby: не хватило места на подставке, в роботе остались", v_robote)
 
-# show_pole()
-# draw_pole()
-# wave_pole()
-# Wave(robot_pos[0],robot_pos[1])
-# doroga = FindPath(4,3)
-# show_pole()
-# print(doroga)
-# make_drive(doroga)
-# cv2.imshow("pole",pole_draw)
-# cv2.waitKey()
-# print(move,dlina)
-# rotate(2)
-# draw_pole()
-# cv2.waitKey()
-# robot_move(7,4,1)
-# move = [62,44,61,11,60]
 
-# robot_dir = 1
-# drive(1)
+robot_pos = [5, 0]   # стартовая клетка (y, x)
+draw_robot()
+draw_pole()
+show_pole()
+cv2.waitKey(1)
 
-# cv2.imshow("pole",pole_draw)
-
-# robot_move(0,4)
-
-cv2.waitKey()
+slam_step1()     # робот осматривается вокруг себя
+sy, sx = slam_explore()   # робот сам ездит и исследует поле
+slam_zadanie(sy, sx)      # по собранной карте едет по трубам к подставке
+key_drive(1)              # потом можно ездить с клавиатуры
+cv2.waitKey(0)
